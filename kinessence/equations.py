@@ -1,5 +1,5 @@
 """
-Pure K-mouflage equations of motion (background level).
+Kinessence equations of motion (background level).
 
 Every function here is stateless: it takes a ``Physics`` context (model +
 coupling + potential + cosmological constants) plus the current field state
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class Physics:
     """Bundles the model, coupling, potential and cosmological constants
-    needed to evaluate the K-mouflage equations of motion."""
+    needed to evaluate the Kinessence equations of motion."""
     model:        "KModel"
     coupling:     "ConformalCoupling"
     potential:    "Potential"
@@ -177,49 +177,100 @@ def linear_system(phys: Physics, phi, phi_prime, a, H_conf):
     return M, phi_prime2, H_conf_prime
 
 
-def attractor_u_ini(phys: Physics, phi0, a_ini, omega_m, omega_r) -> float:
-    alpha0     = phys.alpha(phi0)
-    alpha_phi0 = phys.alpha_phi(phi0)
-    F_ini      = F(phys, phi0)
+# ── Demixed form (notes Sec. 8): no R, no H_conf', no linear system ─────────
 
-    
-    E_ini = np.sqrt(omega_r) * a_ini**(-1)
-    R = -3.0 * alpha0 * omega_m / (2.0 * np.sqrt(omega_r))
+def H_conf_from_constraint(phys: Physics, phi, phi_prime, a) -> float:
+    """Eq. (113): H_conf = alpha phi' + H_E, F1 with the 3 F alpha^2 phi'^2 terms completed into a square."""
+    A_  = phys.A(phi)
+    X_  = X(phys, phi, phi_prime, a)
+    rad = (A_ ** 2 * a ** 2 * (rho_m(phys, a) + rho_r(phys, a))
+           + phys.Kp(X_) * phi_prime ** 2
+           - a ** 2 * A_ ** (-2) * phys.M4_tilde * (phys.K(X_) - phys.f_pot(phi))) / 3.0
+    if rad < 0:
+        raise ValueError(f"H_E^2 < 0: rad={rad:.3e}")
+    H_conf = phys.alpha(phi) * phi_prime + np.sqrt(rad)
+    if H_conf <= 0:
+        raise ValueError(f"H_conf={H_conf:.3e} <= 0")
+    return H_conf
 
-    if R == 0.0:
+
+def phi_prime2_demixed(phys: Physics, phi, phi_prime, a, H_conf) -> float:
+    """Eq. (114): phi'' from the demixed Klein-Gordon equation (radiation drops out, p_m = 0)."""
+    A_  = phys.A(phi)
+    av  = phys.alpha(phi)
+    X_  = X(phys, phi, phi_prime, a)
+    Kp  = phys.Kp(X_)
+    Kpp = phys.Kpp(X_)
+    num = (2.0 * (Kp - X_ * Kpp) * (H_conf - av * phi_prime) * phi_prime
+           + a ** 2 * A_ ** (-2) * (phys.M4_tilde * phys.f_pot_phi(phi)
+                                    + av * A_ ** 4 * rho_m(phys, a)))
+    den = Kp + 2.0 * X_ * Kpp
+    if not np.isfinite(den) or abs(den) < 1e-30:
+        raise RuntimeError(f"K' + 2X K'' = {den:.3e} (singular demixed KG)")
+    return -num / den
+
+
+def H_conf_prime_from_F2(phys: Physics, phi, phi_prime, phi_prime2, a, H_conf) -> float:
+    """Eq. (120): H_conf' from the second Friedmann equation, once phi'' is known."""
+    F_       = F(phys, phi)
+    F_prime  = F_phi(phys, phi) * phi_prime
+    F_prime2 = F_phi2(phys, phi) * phi_prime ** 2 + F_phi(phys, phi) * phi_prime2
+    return (- 0.5 * H_conf ** 2
+            - (a ** 2 * (p_r(phys, a) + p_phi(phys, phi, phi_prime, a))
+               + F_prime2 + H_conf * F_prime) / (2.0 * F_))
+
+
+# ── Conjugate momentum (notes eq. 116), rescaled: pi_t = pi / a^2 = A^-2 K'(X) phi' ──
+# pi_t is ~constant in radiation domination, whereas pi ~ a^2 spans many decades.
+
+def pi_tilde(phys: Physics, phi, phi_prime, a) -> float:
+    return phys.A(phi) ** (-2) * phys.Kp(X(phys, phi, phi_prime, a)) * phi_prime
+
+
+def phi_prime_from_pi_tilde(phys: Physics, phi, pi_t, a, guess=None) -> float:
+    """Root of K'(X) phi' = A^2 pi_t, X = A^2 phi'^2 / (2 M4 a^2).
+    g' = K' + 2X K'' > 0 (denominator of (114)) so the root is unique; Newton, brentq as fallback."""
+    c = phys.A(phi) ** 2 * pi_t
+    if c == 0.0:
         return 0.0
 
-    def g(phi_prime):
-        Z_  = Z(phys, phi0, phi_prime, a_ini)
-        val = Z_ * phi_prime - R
+    def g(pp):
+        return phys.Kp(X(phys, phi, pp, a)) * pp - c
 
-        if alpha_phi0 != 0.0:
-            val += 3.0 * F_ini * alpha0 * alpha_phi0 * phi_prime**2 / E_ini
-        return val
-
-    
-    Z0 = Z(phys, phi0, 0.0, a_ini)
-    if abs(Z0) < 1e-30:
-        Z0 = 1.0
-    phi_prime_lin = R / Z0
-
-
-    lo = min(phi_prime_lin, 0.0)
-    hi = max(phi_prime_lin, 0.0)
-
-    # safety 
-    for _ in range(80):
-        if g(lo) * g(hi) < 0:
+    pp = guess if (guess is not None and guess * c > 0.0) else c / max(phys.Kp(0.0), 1.0)
+    for _ in range(50):
+        X_ = X(phys, phi, pp, a)
+        dg = phys.Kp(X_) + 2.0 * X_ * phys.Kpp(X_)
+        if not np.isfinite(dg) or dg <= 0.0:
             break
-        if R < 0:
-            lo *= 2.0
-        else:
-            hi *= 2.0
-    else:
-        raise RuntimeError(
-            f"attractor_u_ini: bracket failed for model={phys.model.name!r}, "
-            f"phi0={phi0:.3e}, a_ini={a_ini:.3e}, R={R:.3e}"
-        )
+        step = (phys.Kp(X_) * pp - c) / dg
+        new = pp - step
+        if new * c <= 0.0:          # stay on the sign of the root
+            new = 0.5 * pp
+        if abs(new - pp) <= 1e-14 * abs(new):
+            return new
+        pp = new
 
-    phi_prime_ini = brentq(g, lo, hi, xtol=1e-12, rtol=1e-10)
-    return float(phi_prime_ini / E_ini)
+    lo, hi = sorted((0.0, c))
+    for _ in range(200):
+        if g(lo) * g(hi) <= 0.0:
+            break
+        lo, hi = (2.0 * lo, hi) if c < 0 else (lo, 2.0 * hi)
+    else:
+        raise RuntimeError(f"phi_prime_from_pi_tilde: no bracket (pi_t={pi_t:.3e}, a={a:.3e})")
+    return brentq(g, lo, hi, xtol=1e-300, rtol=1e-15)
+
+
+def dpi_tilde_dN(phys: Physics, phi, pi_t, a, H_conf) -> float:
+    """Demixed KG (50) for pi_t = pi/a^2: dpi_t/dN = -2 pi_t - (a^2/H)(A^-4 M4 f_phi + alpha rho_m), p_m = 0."""
+    return (- 2.0 * pi_t
+            - a ** 2 / H_conf * (phys.A(phi) ** (-4) * phys.M4_tilde * phys.f_pot_phi(phi)
+                                 + phys.alpha(phi) * rho_m(phys, a)))
+
+
+def pi_tilde_ini(phys: Physics, phi0, a_ini, omega_m, omega_r) -> float:
+    """Eq. (116)-(117) integrated from a = 0 with H_conf^2 = omega_r (1 + a/a_eq) / a^2, alpha const, f_phi neglected.
+    With t = sqrt(1 + a/a_eq): pi_t = -2 alpha omega_m (t + 2) / (sqrt(omega_r) (t + 1)^2)
+    (cancellation-free form; -> -3 alpha omega_m / (2 sqrt(omega_r)) deep in RD, i.e. (117))."""
+    t = np.sqrt(1.0 + a_ini * omega_m / omega_r)
+    return -2.0 * phys.alpha(phi0) * omega_m * (t + 2.0) / (np.sqrt(omega_r) * (t + 1.0) ** 2)

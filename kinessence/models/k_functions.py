@@ -1,5 +1,5 @@
 """
-K-mouflage kinetic functions K(X), K'(X), K''(X) and their initial conditions.
+Kinetic functions K(X), K'(X), K''(X).
 """
 
 from __future__ import annotations
@@ -7,20 +7,11 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .. import equations as eq
-
-
-def attractor_u_ini(solver) -> float:
-    s = solver
-    return eq.attractor_u_ini(
-        s._phys, s.ic.phi_ini, np.exp(s.N_ini), s.cosmo.omega_m, s.cosmo.omega_r,
-    )
-
 
 @dataclass
 class KModel:
     """
-    Container for a K-mouflage kinetic model.
+    Container for a kinetic model.
 
     Attributes
     ----------
@@ -28,7 +19,6 @@ class KModel:
     K    : Callable[[float], float]   K(X)
     Kp   : Callable[[float], float]   dK/dX  (K'(X))
     Kpp  : Callable[[float], float]   d²K/dX²
-    u_ini: Callable[[object], float]
     params : dict
         Free parameters for display / comparison.
     """
@@ -36,7 +26,6 @@ class KModel:
     K:      Callable[[float], float]
     Kp:     Callable[[float], float]
     Kpp:    Callable[[float], float]
-    u_ini:  Callable          # u_ini(solver) -> float
     params: dict = field(default_factory=dict)
 
     def __repr__(self) -> str:
@@ -53,9 +42,6 @@ def make_powerlaw_K(K0: float, m: int) -> KModel:
 
     Pure kinetic term (K-essence). The vacuum-energy offset lives in the
     potential f(φ), see models.potential.
-
-    The initial velocity ũ_ini is derived from the attractor solution in
-    the radiation/matter dominated era.
 
     Parameters
     ----------
@@ -82,26 +68,29 @@ def make_powerlaw_K(K0: float, m: int) -> KModel:
         K      = K,
         Kp     = Kp,
         Kpp    = Kpp,
-        u_ini  = attractor_u_ini,
         params = {"K0": K0, "m": m},
     )
 
 
 def make_LambdaCDM_K() -> KModel:
-    def K(X: float)   -> float: return 0.0
-    def Kp(X: float)  -> float: return  0.0
-    def Kpp(X: float) -> float: return  0.0
+    """
+    Canonical kinetic term K(X) = X, to be used with make_LambdaCDM_coupling()
+    and a constant potential to recover ΛCDM with Λ = M4_tilde.
 
-    def u_ini(solver) -> float:
-
-        return 0.0
+    With alpha = f_phi = 0 the demixed Klein-Gordon source vanishes, pi_ini = 0
+    and phi' ≡ 0, so K never enters the background. K ≡ 0 would not work: with
+    K' ≡ 0 the Klein-Gordon equation degenerates (phi' undetermined) and the
+    solver cannot invert K'(X) phi' = A^2 pi.
+    """
+    def K(X):   return X
+    def Kp(X):  return np.ones_like(X, dtype=float)
+    def Kpp(X): return np.zeros_like(X, dtype=float)
 
     return KModel(
-        name   = "ΛCDM (K=0)",
+        name   = "ΛCDM (K=X, frozen field)",
         K      = K,
         Kp     = Kp,
         Kpp    = Kpp,
-        u_ini  = u_ini,
         params = {},
     )
 
@@ -116,6 +105,5 @@ def make_arctan_K(K_star, X_star):
         K      = K,
         Kp     = Kp,
         Kpp    = Kpp,
-        u_ini  = attractor_u_ini,
         params = {'K_star': K_star, 'X_star': X_star},
     )

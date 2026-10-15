@@ -1,13 +1,9 @@
 """
-
-
-Usage
------
->>> from kmouflage.solver import KMouflageBackground, CosmologicalParams
->>> from kmouflage.calibrate_M4 import calibrate_M4_tilde
+>>> from kinessence.solver import KinessenceBackground, CosmologicalParams
+>>> from kinessence.calibrate_M4 import calibrate_M4_tilde
 >>>
->>> bg = KMouflageBackground(model, coupling, cosmo=CosmologicalParams(M4_tilde=0.75))
->>> M4, H0_final, nit = calibrate_M4_tilde(bg, target_H0=67.36)
+>>> bg = KinessenceBackground(model, coupling, cosmo=CosmologicalParams(M4_tilde=0.75))
+>>> M4, H0_final, niter = calibrate_M4_tilde(bg, target_H0=67.36)
 """
 
 from __future__ import annotations
@@ -15,11 +11,11 @@ from __future__ import annotations
 import numpy as np
 from scipy.optimize import brentq
 
-from .solver import KMouflageBackground
+from .solver import KinessenceBackground
 
 
 def calibrate_M4_tilde(
-    bg: KMouflageBackground,
+    bg: KinessenceBackground,
     target_H0: float,
     tol: float = 1e-5,
     max_iter: int = 100,

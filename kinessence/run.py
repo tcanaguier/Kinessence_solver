@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .solver import KMouflageBackground, CosmologicalParams
+from .solver import KinessenceBackground, CosmologicalParams
 
 # enough to rebuild every other quantity later, so always saved
 MANDATORY_FIELDS = ["a", "phi", "phi_prime"]
@@ -26,23 +26,28 @@ DEFAULT_RUNS_DIR = os.path.join(
 
 
 def run_background(model, coupling, potential=None, cosmo=None, ic=None,
-                    verbose: bool = False, **kwargs) -> KMouflageBackground:
-    """Build and run a KMouflageBackground."""
-    bg = KMouflageBackground(model=model, coupling=coupling, potential=potential,
+                    verbose: bool = False, **kwargs) -> KinessenceBackground:
+    """Build and run a KinessenceBackground."""
+    bg = KinessenceBackground(model=model, coupling=coupling, potential=potential,
                               cosmo=cosmo, ic=ic, **kwargs)
     bg.run(verbose=verbose)
     return bg
 
 
-def default_table_name(bg: KMouflageBackground) -> str:
+def _base_name(obj) -> str:
+    """"power-law (K0=1, m=3)" -> "power_law"."""
+    return re.sub(r"[^0-9A-Za-z]+", "_", obj.name.split("(", 1)[0].strip()).strip("_")
+
+
+def default_table_name(bg: KinessenceBackground) -> str:
     """Suggests a name from the model's real params, e.g. "..._beta-0.1_..."."""
     def tag(obj):
-        base = re.sub(r"[^0-9A-Za-z]+", "_", obj.name.split("(", 1)[0].strip()).strip("_")
-        return base + "".join(f"_{k}-{v}" for k, v in obj.params.items())
-    return f"kmouflage_table_{tag(bg.coupling)}_{tag(bg.model)}_{tag(bg.potential)}"
+        return _base_name(obj) + "".join(f"_{k}-{v}" for k, v in obj.params.items())
+    return (f"kinessence_table_{tag(bg.coupling)}_{tag(bg.model)}_{tag(bg.potential)}"
+            f"_M4-{bg.M4_tilde:g}")
 
 
-def save_table(bg: KMouflageBackground, name: str = None, fields=None,
+def save_table(bg: KinessenceBackground, name: str = None, fields=None,
                outdir: str = DEFAULT_RUNS_DIR) -> str:
     """Save an already-run bg as one CSV (run info in a commented header, then the data). Returns the path."""
     if not hasattr(bg, "_N"):
@@ -67,6 +72,60 @@ def save_table(bg: KMouflageBackground, name: str = None, fields=None,
         f.write(",".join(["N", *fields]) + "\n")
         np.savetxt(f, data, delimiter=",")
 
+    return path
+
+
+# column order read by pysco (pysco/cosmotable.py)
+PYSCO_COLUMNS = "aexp E mu_K Omega_m Omega_r py_DE"
+
+
+def save_pysco_table(bg: KinessenceBackground, path: str = None, aexp_min: float = 1e-8,
+                     n_points: int = 200_000, header_extra=None, overwrite: bool = False,
+                     fmt: str = "%.10e") -> str:
+    """Write the table pysco reads for theory = kmouflage. Returns the path.
+
+    Columns: aexp, E = H/H0, mu_K, Omega_m, Omega_r, py_DE = a^2 p_DE / (3 calH^2),
+    on n_points log-spaced values of a in [aexp_min, 1] (pysco starts its growth
+    functions at a = 1e-8). E is normalised by h_predicted: the solver works in
+    units of H100, not H0.
+
+    header_extra: extra "key=value" lines put first in the header (e.g. run
+    parameters, screening tests); the header stays readable by key=value parsing.
+    """
+    if not hasattr(bg, "_N"):
+        raise RuntimeError("bg.run() must be called before save_pysco_table().")
+    a_start = float(np.exp(bg.N_ini))
+    if a_start > aexp_min * (1.0 + 1e-12):
+        raise ValueError(f"background starts at a={a_start:.3e} > aexp_min={aexp_min:.1e}: "
+                         f"run it with z_ini >= {1.0 / aexp_min - 1.0:.1e}")
+
+    path = path or os.path.join(DEFAULT_RUNS_DIR, f"{default_table_name(bg)}_pysco.txt")
+    if os.path.exists(path) and not overwrite:
+        raise FileExistsError(f"{path} already exists (pass overwrite=True)")
+
+    N = np.linspace(np.log(aexp_min), 0.0, n_points)
+    E = bg.H(N) / bg.h_predicted                      # E(a=1) = 1
+
+    header = "\n".join([
+        *(header_extra or []),
+        f"model={_base_name(bg.model)} coupling={_base_name(bg.coupling)} potential={_base_name(bg.potential)} "
+        + " ".join(f"{k}={v}" for obj in (bg.model, bg.coupling, bg.potential) for k, v in obj.params.items()),
+        f"omega_m={bg.cosmo.omega_m} omega_r={bg.cosmo.omega_r} M4_tilde={bg.M4_tilde} "
+        f"z_ini={bg.ic.z_ini:g} phi_ini={bg.ic.phi_ini}",
+        f"H0={bg.H0_predicted:.10f} Om_m0={bg.Omega_m0_predicted:.10f} "
+        f"Ode0={bg.Omega_de0_predicted:.10f} mu_K0={float(bg.mu_K(0.0)):.10f}",
+        # must stay << 1, otherwise the solver initial conditions (radiation era) are not valid
+        f"Ode_zini={float(bg.Omega_de_def(bg._N[0])):.3e}",
+        f"columns: {PYSCO_COLUMNS}   (E = H/H0, py_DE = a^2 p_DE / (3 calH^2))",
+    ])
+
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    np.savetxt(
+        path,
+        np.column_stack([np.exp(N), E, bg.mu_K(N), bg.Omega_m(N), bg.Omega_r(N), bg.py_DE(N)]),
+        header=header,
+        fmt=fmt,
+    )
     return path
 
 

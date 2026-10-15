@@ -170,9 +170,9 @@ class LCDMGrowth(GrowthSolver):
         print("─────────────────────────────────────────────────────────────\n")
 
 
-class KmouflageGrowth(GrowthSolver):
+class KinessenceGrowth(GrowthSolver):
     """
-    K-mouflage growth solver. 
+    Kinessence growth solver. 
     The background starts at z_ini ~ 1e5 (RDE); the growth ODE must start
     well into MDE for fgrowth=1 to be a valid initial condition, hence
     N_MDE = N_eq + N_offset (N_offset e-folds after matter-radiation
@@ -224,17 +224,6 @@ class KmouflageGrowth(GrowthSolver):
         z_MDE = float(1.0 / np.exp(self.N_ini) - 1.0)
         z_eq  = float(1.0 / bg.aeq - 1.0)
 
-        # print(f"[Kmouflage] N_eq={N_eq:.3f}  (z_eq={z_eq:.0f})")
-        # print(f"[Kmouflage] N_MDE={self.N_ini:.3f}  (z_MDE={z_MDE:.0f}, "
-        #       f"{N_offset:.1f} e-folds après a_eq)")
-        # print(f"[Kmouflage] CI check à N_MDE :")
-        # print(f"             Ω_r/Ω_m = {ratio:.4f}  (attendu ≪ 1)")
-        # print(f"             μ_K     = {mu_ini:.6f}  (attendu ≈ 1)")
-        # print(f"             F       = {F_ini:.6f}  (attendu ≈ 1)")
-
-        # if ratio > 0.1:
-        #     print(f"  ⚠ ATTENTION : Ω_r/Ω_m={ratio:.3f} > 0.1, "
-        #           f"augmenter N_offset (actuellement {N_offset})")
 
     def run(self, verbose: bool = True) -> dict:
         N_eval, f, Dp, a_arr, z_arr = self._integrate()
@@ -248,7 +237,7 @@ class KmouflageGrowth(GrowthSolver):
 
         if verbose:
             print(
-                f"[Kmouflage] f(z=0)={f[-1]:.5f} | D+(z=0)={Dp[-1]:.5f} | "
+                f"[Kinessence] f(z=0)={f[-1]:.5f} | D+(z=0)={Dp[-1]:.5f} | "
                 f"Ω_m(z=0)={Omega_m_arr[-1]:.5f} | μ_K(z=0)={mu_K_arr[-1]:.5f} | "
                 f"γ(z=0)={gamma_arr[-1]:.5f}     | f(N_ini) ={f[0]}"
             )
@@ -269,7 +258,7 @@ class KmouflageGrowth(GrowthSolver):
         i1 = np.argmin(np.abs(r["z"] - 1.0))
         i2 = np.argmin(np.abs(r["z"] - 0.5))
 
-        print("\n── Kmouflage Growth ──────────────────────────────────────────────")
+        print("\n── Kinessence Growth ─────────────────────────────────────────────")
         print(f"  N_ini (MDE) = {self.N_ini:.3f}  "
               f"(z_ini = {1.0/np.exp(self.N_ini)-1.0:.0f}, "
               f"{self.N_ini - self.N_eq:.1f} e-folds après z_eq)")

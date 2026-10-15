@@ -22,7 +22,7 @@ class CosmologicalParams:
     omega_m:    float = 0.1430    # Omega_m0 * h^2 (Planck 2018), fixed physical density
     omega_r:    float = 4.15e-5   # Omega_r0 * h^2 (Planck 2018), fixed physical density
 
-    M4_tilde:   float = 1.0       # amplitude of the K-mouflage kinetic term
+    M4_tilde:   float = 1.0       # amplitude of the kinetic term
 
 
 @dataclass
@@ -31,7 +31,7 @@ class InitialConditions:
     phi_ini: float = 0.0
 
 
-class KMouflageBackground:
+class KinessenceBackground:
     def __init__(
         self,
         model:         KModel,
@@ -41,8 +41,9 @@ class KMouflageBackground:
         potential:     Potential          | None = None,
         rtol:          float = 1e-10,
         atol:          float = 1e-12,
-        max_step:      float = 0.005,
+        max_step:      float = np.inf,   # no cap: rtol drives the steps; pass e.g. 0.005 as a safety cap
         N_points:      int   = 100_000,
+        variables:     str   = "pi",
     ) -> None:
         self.model     = model
         self.coupling  = coupling
@@ -53,6 +54,9 @@ class KMouflageBackground:
         self.atol      = atol
         self.max_step  = max_step
         self.N_points  = N_points
+        if variables not in ("pi", "phi_prime"):
+            raise ValueError(f"variables must be 'pi' or 'phi_prime', got {variables!r}")
+        self.variables = variables
 
         c = self.cosmo
         self.M4_tilde     = c.M4_tilde
@@ -77,49 +81,44 @@ class KMouflageBackground:
             rho_r0_tilde = self.rho_r0_tilde,
         )
 
-    def _phi_prime_fixed_point(self, phi, u, a):
-        """Fixed-point iteration phi_prime = E_conf(phi, phi_prime, a) * u, since E_conf depends on phi_prime through rho_phi."""
-        phi_prime = 0.0
-        E_conf = None
-        for _ in range(20):
-            E_conf        = eq.E_conf_from_F1(self._phys, phi, phi_prime, a)
-            phi_prime_new = E_conf * u
-            if abs(phi_prime_new - phi_prime) / (abs(phi_prime) + 1e-300) < 1e-12:
-                break
-            phi_prime = phi_prime_new
-        return phi_prime, E_conf
+    def _phi_prime(self, phi, y2, a):
+        """phi' from the second state variable (pi_t root-solve, warm-started on the previous call)."""
+        if self.variables == "phi_prime":
+            return y2
+        pp = eq.phi_prime_from_pi_tilde(self._phys, phi, y2, a, guess=self._pp_guess)
+        self._pp_guess = pp
+        return pp
 
     def _rhs_N(self, N, Y):
-        phi, u = Y
-        a      = np.exp(N)
+        """Notes Sec. 8, state (phi, pi_t) with pi_t = pi/a^2 = A^-2 K' phi' (or (phi, phi'), eq. 115).
+        Everything explicit: phi' (root) -> H_conf (113) -> d/dN."""
+        phi, y2 = Y
+        a       = np.exp(N)
 
-        phi_prime, E_conf = self._phi_prime_fixed_point(phi, u, a)
-        H_conf = E_conf
+        phi_prime = self._phi_prime(phi, y2, a)
+        H_conf    = eq.H_conf_from_constraint(self._phys, phi, phi_prime, a)
 
-        M, phi_prime2, H_conf_prime = eq.linear_system(self._phys, phi, phi_prime, a, H_conf)
-
-        det = M[0, 0] * M[1, 1] - M[0, 1] * M[1, 0]
-        if not np.isfinite(det) or abs(det) < 1e-30:
-            raise RuntimeError(f"Système singulier N={N:.4f} det={det:.3e}")
-
-        dphi_dN = u
-        du_dN   = (phi_prime2 / E_conf**2
-                   - u * H_conf_prime / E_conf**2)
-
-        return np.array([dphi_dN, du_dN])
+        if self.variables == "pi":
+            return np.array([phi_prime / H_conf, eq.dpi_tilde_dN(self._phys, phi, y2, a, H_conf)])
+        phi_prime2 = eq.phi_prime2_demixed(self._phys, phi, phi_prime, a, H_conf)
+        return np.array([phi_prime / H_conf, phi_prime2 / H_conf])
 
     def _integrate_once(self, rtol=None, atol=None, N_points=None):
         rtol     = rtol     or self.rtol
         atol     = atol     or self.atol
         N_points = N_points or self.N_points
 
-        phi_ini = self.ic.phi_ini
-        u_ini   = self.model.u_ini(self)
+        phi_ini  = self.ic.phi_ini
+        a_ini    = np.exp(self.N_ini)
+        pi_t_ini = eq.pi_tilde_ini(self._phys, phi_ini, a_ini, self.cosmo.omega_m, self.cosmo.omega_r)
+        self._pp_guess = None
+        phi_prime_ini  = eq.phi_prime_from_pi_tilde(self._phys, phi_ini, pi_t_ini, a_ini)
+        y2_ini = pi_t_ini if self.variables == "pi" else phi_prime_ini
 
         sol = solve_ivp(
             self._rhs_N,
             t_span   = (self.N_ini, self.N_end),
-            y0       = np.array([phi_ini, u_ini]),
+            y0       = np.array([phi_ini, y2_ini]),
             method   = "Radau",
             t_eval   = np.linspace(self.N_ini, self.N_end, N_points),
             rtol     = rtol,
@@ -169,22 +168,21 @@ class KMouflageBackground:
     def _build_interpolators(self, sol) -> None:
         phys = self._phys
 
-        N_arr   = sol.t
-        phi_arr = sol.y[0]
-        u_arr   = sol.y[1]
-        a_arr   = np.exp(N_arr)
+        N_arr         = sol.t
+        phi_arr       = sol.y[0]
+        a_arr         = np.exp(N_arr)
+        self._pp_guess = None
+        phi_prime_arr = np.array([self._phi_prime(ph, y2, a)
+                                  for ph, y2, a in zip(phi_arr, sol.y[1], a_arr)])
 
         def _interp(arr):
             return interp1d(N_arr, arr, kind='linear',
                             bounds_error=False, fill_value='extrapolate')
 
-        E_conf_arr    = np.empty_like(N_arr)
-        phi_prime_arr = np.empty_like(N_arr)
-
-        for i, (ph, u, a) in enumerate(zip(phi_arr, u_arr, a_arr)):
-            phi_prime_arr[i], E_conf_arr[i] = self._phi_prime_fixed_point(ph, u, a)
-
+        E_conf_arr = np.array([eq.H_conf_from_constraint(phys, ph, pp, a)
+                               for ph, pp, a in zip(phi_arr, phi_prime_arr, a_arr)])
         H_conf_arr = E_conf_arr
+        u_arr      = phi_prime_arr / H_conf_arr
 
         eta_arr      = cumulative_trapezoid(1.0 / H_conf_arr, N_arr, initial=0.0)
         t_cosmic_arr = cumulative_trapezoid(a_arr / H_conf_arr, N_arr, initial=0.0)
@@ -213,7 +211,8 @@ class KMouflageBackground:
         phi_prime2_arr   = np.empty_like(N_arr)
         H_conf_prime_arr = np.empty_like(N_arr)
         for i, (ph, pp, a, Hc) in enumerate(zip(phi_arr, phi_prime_arr, a_arr, H_conf_arr)):
-            _, phi_prime2_arr[i], H_conf_prime_arr[i] = eq.linear_system(phys, ph, pp, a, Hc)
+            phi_prime2_arr[i]   = eq.phi_prime2_demixed(phys, ph, pp, a, Hc)
+            H_conf_prime_arr[i] = eq.H_conf_prime_from_F2(phys, ph, pp, phi_prime2_arr[i], a, Hc)
 
         F_prime2_arr = F_phi2_arr * phi_prime_arr**2 + F_phi_arr * phi_prime2_arr
 
@@ -241,12 +240,12 @@ class KMouflageBackground:
                     + (1 / F_arr)
                     * (p_phi_arr + (F_prime2_arr + H_conf_arr * F_prime_arr) / a_arr**2))
 
-        w_phi_arr      = np.where(np.abs(rho_phi_arr)      > 1e-30,
-                                  p_phi_arr / rho_phi_arr,      -1.0)
-        w_de_fried_arr = np.where(np.abs(rho_de_fried_arr) > 1e-30,
-                                  p_de_arr / rho_de_fried_arr,  -1.0)
-        w_de_def_arr   = np.where(np.abs(rho_de_def_arr)   > 1e-30,
-                                  p_de_arr / rho_de_def_arr,    -1.0)
+        def _w(p, rho):   # p / rho, -1 where rho ~ 0 (no division there)
+            return np.divide(p, rho, out=np.full_like(rho, -1.0), where=np.abs(rho) > 1e-30)
+
+        w_phi_arr      = _w(p_phi_arr, rho_phi_arr)
+        w_de_fried_arr = _w(p_de_arr,  rho_de_fried_arr)
+        w_de_def_arr   = _w(p_de_arr,  rho_de_def_arr)
 
         denom         = 3.0 * H_conf_arr**2
         Om_arr        = a_arr**2 * rho_m_arr        / denom
@@ -267,7 +266,8 @@ class KMouflageBackground:
         #Useful quantities for pysco
         py_DE_arr = a_arr**2 * p_de_arr / (3*H_conf_arr**2)
 
-        det_arr = 2.0 * F_arr * Z_eff_arr - 6.0 * av_arr * F_arr * F_prime_arr
+        # denominator of the demixed KG (114): K' + 2X K'' = A^2 (Z_eff + 6 F alpha^2)
+        det_arr = Kp_arr + 2.0 * X_arr * Kpp_arr
         M_Pl0_eff = F_arr[-1]
         self.M_Pl0_eff   = M_Pl0_eff
         self.delta_Mpl   = M_Pl0_eff - 1.0
@@ -287,6 +287,7 @@ class KMouflageBackground:
         self.H               = _interp(H_arr)
         self.H_conf          = _interp(H_conf_arr)
         self.phi_prime       = _interp(phi_prime_arr)
+        self.pi_tilde        = _interp(A_arr**(-2) * Kp_arr * phi_prime_arr)
         self.phi_prime2      = _interp(phi_prime2_arr)
         self.H_conf_prime    = _interp(H_conf_prime_arr)
         self.F               = _interp(F_arr)
