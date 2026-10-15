@@ -58,8 +58,9 @@ come out as predictions (`bg.H0_predicted`, `bg.Omega_m0_predicted`,
 We don't calibrate M4_tilde by default. If you really want a given H0,
 `calibrate_M4_tilde` can tune it for you.
 
-All quantities are in units of H100 = 100 km/s/Mpc, with M_Pl = 1. To get H/H0,
-divide by the predicted h: `bg.H(N) / bg.h_predicted`.
+All quantities are in units of H100 = 100 km/s/Mpc, with M_Pl = 1. So `bg.H(N)`
+is H divided by 100 km/s/Mpc, and today it equals h. For plots, use
+`bg.E(N)` for H/H0 (equal to 1 today) and `bg.H_kms(N)` for H in km/s/Mpc.
 
 ## ΛCDM
 

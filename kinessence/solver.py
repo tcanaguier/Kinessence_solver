@@ -165,6 +165,15 @@ class KinessenceBackground:
 
     def _F(self, phi): return eq.F(self._phys, phi)
 
+    # bg.H(N) is in units of H100 = 100 km/s/Mpc, so bg.H(0) = h
+    def E(self, N):
+        """H/H0, equal to 1 today."""
+        return self.H(N) / self.h_predicted
+
+    def H_kms(self, N):
+        """H in km/s/Mpc."""
+        return self.H(N) * self.cosmo.H100
+
     def _build_interpolators(self, sol) -> None:
         phys = self._phys
 

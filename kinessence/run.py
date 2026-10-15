@@ -86,7 +86,7 @@ def save_pysco_table(bg: KinessenceBackground, path: str = None, aexp_min: float
 
     Columns: aexp, E = H/H0, mu_K, Omega_m, Omega_r, py_DE = a^2 p_DE / (3 calH^2),
     on n_points log-spaced values of a in [aexp_min, 1] (pysco starts its growth
-    functions at a = 1e-8). E is normalised by h_predicted: the solver works in
+    functions at a = 1e-8). E = bg.E(N) = H/H0, normalised by h_predicted: the solver works in
     units of H100, not H0.
 
     header_extra: extra "key=value" lines put first in the header (e.g. run
@@ -104,7 +104,7 @@ def save_pysco_table(bg: KinessenceBackground, path: str = None, aexp_min: float
         raise FileExistsError(f"{path} already exists (pass overwrite=True)")
 
     N = np.linspace(np.log(aexp_min), 0.0, n_points)
-    E = bg.H(N) / bg.h_predicted                      # E(a=1) = 1
+    E = bg.E(N)                                       # H/H0, E(a=1) = 1
 
     header = "\n".join([
         *(header_extra or []),
